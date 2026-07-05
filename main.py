@@ -7,17 +7,12 @@ import io
 from streamlit_gsheets import GSheetsConnection
 
 # ------------------------------------------------------------
-# 1. Загрузка конфигурации из секретов (car_numbers + cars)
+# 1. Загрузка конфигурации из секретов
 # ------------------------------------------------------------
 def load_config():
-    """
-    Загружает из st.secrets:
-      - car_numbers: словарь {номер_авто: телефон}
-      - cars_list: список номеров автомобилей для контроля
-    """
     try:
         car_numbers = dict(st.secrets["car_numbers"])
-        cars_list = list(st.secrets["cars"]["list"])
+        cars_list = list(st.secrets["cars"])
         return car_numbers, cars_list
     except (AttributeError, KeyError, TypeError):
         st.error("❌ Не найдены секретные данные. "
@@ -25,17 +20,9 @@ def load_config():
         st.stop()
 
 # ------------------------------------------------------------
-# 2. Основная логика (НЕ ИЗМЕНЕНА, только добавлен параметр cars_list)
+# 2. Основная логика (без изменений)
 # ------------------------------------------------------------
 def get_odometers(df_od, dt_date, car_numbers, cars_list):
-    """
-    Возвращает:
-      - result_dict: {car_number: разница пробега}
-      - log_no_data_cars: список строк с предупреждениями
-      - log_values: список проблемных записей
-      - d1_cars, d2_cars: списки машин, по которым есть данные в каждом периоде
-      - difference_current, difference_last: списки отсутствующих
-    """
     dict1 = {}
     dict2 = {}
     log = []
@@ -84,7 +71,6 @@ def get_odometers(df_od, dt_date, car_numbers, cars_list):
     common_keys = set(dict1_result) & set(dict2_result)
     result_dict = {k: int(dict1_result[k]) - int(dict2_result[k]) for k in common_keys}
 
-    # Используем переданный список cars_list вместо жёстко заданного
     difference_current = [c for c in cars_list if c not in d1_cars]
     difference_last = [c for c in cars_list if c not in d2_cars]
 
@@ -104,8 +90,6 @@ def init_session():
         st.session_state.dt_date = None
     if 'results' not in st.session_state:
         st.session_state.results = None
-    if 'logs' not in st.session_state:
-        st.session_state.logs = None
     if 'car_numbers' not in st.session_state or 'cars_list' not in st.session_state:
         car_numbers, cars_list = load_config()
         st.session_state.car_numbers = car_numbers
@@ -125,7 +109,7 @@ def load_data_from_gsheet():
         return None
 
 # ------------------------------------------------------------
-# 5. Streamlit UI
+# 5. Основной интерфейс (один экран)
 # ------------------------------------------------------------
 def main():
     st.set_page_config(page_title="Анализ пробега", layout="wide")
@@ -133,162 +117,150 @@ def main():
 
     init_session()
 
-    menu = st.sidebar.radio(
-        "Навигация",
-        ["Загрузка данных", "Обработка", "Результаты", "Справка"]
-    )
+    # ---- Выбор месяца и года ----
+    col1, col2 = st.columns(2)
+    with col1:
+        year = st.selectbox("Год", list(range(2020, 2030)), index=datetime.now().year - 2020)
+    with col2:
+        month = st.selectbox("Месяц", list(range(1, 13)), index=datetime.now().month - 1)
 
-    # ---------- Загрузка данных ----------
-    if menu == "Загрузка данных":
-        st.header("📂 Загрузка данных из Google Sheets")
+    last_day = calendar.monthrange(year, month)[1]
+    dt_date = datetime(year, month, last_day)
+    st.write(f"Выбрана дата: **{dt_date.strftime('%d.%m.%Y')}**")
 
-        col1, col2 = st.columns(2)
-        with col1:
-            year = st.selectbox("Год", list(range(2020, 2030)), index=datetime.now().year - 2020)
-        with col2:
-            month = st.selectbox("Месяц", list(range(1, 13)), index=datetime.now().month - 1)
-
-        last_day = calendar.monthrange(year, month)[1]
-        dt_date = datetime(year, month, last_day)
-        st.write(f"Выбрана дата: **{dt_date.strftime('%d.%m.%Y')}**")
-
-        if st.button("Сохранить дату"):
-            st.session_state.dt_date = dt_date
-            st.success("Дата сохранена!")
-
-        st.divider()
-
-        if st.button("📥 Загрузить данные из Google Sheets"):
-            with st.spinner("Загрузка данных из Google Sheets..."):
-                df = load_data_from_gsheet()
-                if df is not None:
-                    required_cols = ['Timestamp', 'Гос. номер автомобиля (только 3 цифры)', 'Текущий пробег (значение на одометре) (только число)']
-                    if all(col in df.columns for col in required_cols):
-                        st.session_state.df_od = df
-                        st.success(f"✅ Данные успешно загружены! Получено {len(df)} записей.")
-                        st.dataframe(df.head(10))
-                    else:
-                        st.error(f"❌ Таблица должна содержать колонки: {', '.join(required_cols)}")
-                        st.write("Найденные колонки:", list(df.columns))
+    # ---- Кнопка загрузки и расчёта ----
+    if st.button("📥 Загрузить данные и рассчитать"):
+        with st.spinner("Загрузка данных из Google Sheets..."):
+            df = load_data_from_gsheet()
+            if df is not None:
+                # Переименовываем колонки в нужные для логики
                 df = df.rename(columns={
                     'Timestamp': 'time',
                     'Гос. номер автомобиля (только 3 цифры)': 'car_number',
                     'Текущий пробег (значение на одометре) (только число)': 'odometer'
                 })
+                # Проверяем наличие колонок после переименования
+                required = ['time', 'car_number', 'odometer']
+                if all(col in df.columns for col in required):
+                    st.session_state.df_od = df
+                    st.session_state.dt_date = dt_date
+                    st.success(f"✅ Данные загружены ({len(df)} записей). Выполняется расчёт...")
+                else:
+                    st.error(f"❌ После переименования не хватает колонок: {required}")
+                    st.write("Фактические колонки:", list(df.columns))
+                    st.stop()
+            else:
+                st.stop()
 
-        st.divider()
-        st.subheader("Текущее состояние сессии")
-        st.write("Дата:", st.session_state.dt_date)
-        if st.session_state.df_od is not None:
-            st.write(f"Данные загружены: ✅ ({len(st.session_state.df_od)} записей)")
-        else:
-            st.write("Данные загружены: ❌")
+        # ---- Расчёт ----
+        with st.spinner("Выполняется расчёт..."):
+            df = st.session_state.df_od
+            dt = st.session_state.dt_date
+            car_numbers = st.session_state.car_numbers
+            cars_list = st.session_state.cars_list
 
-    # ---------- Обработка ----------
-    elif menu == "Обработка":
-        st.header("⚙️ Запуск расчёта")
-
-        if st.session_state.df_od is None:
-            st.warning("Сначала загрузите данные на вкладке 'Загрузка данных'.")
-        elif st.session_state.dt_date is None:
-            st.warning("Сначала выберите и сохраните дату на вкладке 'Загрузка данных'.")
-        else:
-            if st.button("▶️ Выполнить расчёт"):
-                with st.spinner("Идёт обработка..."):
-                    df = st.session_state.df_od
-                    dt = st.session_state.dt_date
-                    car_numbers = st.session_state.car_numbers
-                    cars_list = st.session_state.cars_list
-
-                    result_dict, logs, log_vals, d1_cars, d2_cars, diff_cur, diff_last = get_odometers(
-                        df, dt, car_numbers, cars_list
-                    )
-
-                    st.session_state.results = {
-                        'result_dict': result_dict,
-                        'd1_cars': d1_cars,
-                        'd2_cars': d2_cars,
-                        'diff_cur': diff_cur,
-                        'diff_last': diff_last,
-                        'log_vals': log_vals,
-                        'logs': logs
-                    }
-                    st.success("Расчёт завершён! Перейдите на вкладку 'Результаты'.")
-
-        if st.session_state.results:
-            st.subheader("Результаты предыдущего расчёта")
-            res = st.session_state.results
-            st.write(f"Найдено машин с данными за оба периода: **{len(res['result_dict'])}**")
-            st.write("Логов:", len(res['logs']))
-
-    # ---------- Результаты ----------
-    elif menu == "Результаты":
-        st.header("📈 Результаты обработки")
-
-        res = st.session_state.results
-        if res is None:
-            st.info("Расчёт ещё не выполнен. Перейдите на вкладку 'Обработка'.")
-        else:
-            df_res = pd.DataFrame(list(res['result_dict'].items()), columns=['Автомобиль', 'Разница пробега'])
-            df_res = df_res.sort_values('Автомобиль')
-            st.subheader("Разница пробега (текущий месяц – предыдущий)")
-            st.dataframe(df_res, use_container_width=True)
-
-            st.subheader("📋 Логи")
-            for log_msg in res['logs']:
-                st.text(log_msg)
-
-            with st.expander("Подробные списки машин"):
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.write("**Машины с данными в текущем периоде:**", res['d1_cars'])
-                    st.write("**Машины без данных в текущем периоде:**", res['diff_cur'])
-                with col2:
-                    st.write("**Машины с данными в предыдущем периоде:**", res['d2_cars'])
-                    st.write("**Машины без данных в предыдущем периоде:**", res['diff_last'])
-
-            st.subheader("💾 Скачать результаты")
-            output = io.BytesIO()
-            with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                df_res.to_excel(writer, sheet_name='Разница', index=False)
-                log_df = pd.DataFrame(res['logs'], columns=['Сообщение'])
-                log_df.to_excel(writer, sheet_name='Логи', index=False)
-                detail_df = pd.DataFrame({
-                    'Период': ['Текущий', 'Предыдущий'],
-                    'Машины с данными': [', '.join(res['d1_cars']), ', '.join(res['d2_cars'])],
-                    'Машины без данных': [', '.join(res['diff_cur']), ', '.join(res['diff_last'])]
-                })
-                detail_df.to_excel(writer, sheet_name='Сводка', index=False)
-            output.seek(0)
-
-            st.download_button(
-                label="📥 Скачать Excel-отчёт",
-                data=output,
-                file_name=f"результаты_пробег_{datetime.now().strftime('%Y%m%d')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            result_dict, logs, log_vals, d1_cars, d2_cars, diff_cur, diff_last = get_odometers(
+                df, dt, car_numbers, cars_list
             )
 
-    # ---------- Справка ----------
-    else:
-        st.header("📖 Справка")
-        st.markdown("""
-        **Как пользоваться приложением:**
+            st.session_state.results = {
+                'result_dict': result_dict,
+                'd1_cars': d1_cars,
+                'd2_cars': d2_cars,
+                'diff_cur': diff_cur,
+                'diff_last': diff_last,
+                'logs': logs
+            }
+            st.success("✅ Расчёт завершён!")
 
-        1. **Загрузка данных**  
-           - Выберите месяц и год.  
-           - Нажмите «Загрузить данные из Google Sheets».  
-           - Таблица должна содержать колонки: `time`, `car_number`, `odometer`.  
-           - Формат времени: `день/месяц/год часы:минуты:секунды`.  
-           - Нажмите «Сохранить дату».
+    # ---- Отображение результатов ----
+    res = st.session_state.results
+    if res is not None:
+        st.divider()
+        st.header("📋 Результаты")
 
-        2. **Обработка** – нажмите «Выполнить расчёт».
+        # Вычисляем даты периодов (для вывода)
+        dt = st.session_state.dt_date
+        d1 = dt - timedelta(days=10)
+        d2 = dt + timedelta(days=15)
+        d3 = dt - timedelta(days=40)
+        d4 = dt - timedelta(days=14)
 
-        3. **Результаты** – просмотр и скачивание Excel-отчёта.
+        # ----- Текущий период -----
+        st.subheader(f"Текущий период: {d1.strftime('%d.%m.%Y')} – {d2.strftime('%d.%m.%Y')}")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.write("**✅ Есть данные у машин:**")
+            if res['d1_cars']:
+                st.write(", ".join(res['d1_cars']))
+            else:
+                st.write("(нет)")
+        with col2:
+            st.write("**❌ Нет данных у машин:**")
+            if res['diff_cur']:
+                # Выводим список и телефоны
+                for car in res['diff_cur']:
+                    phone = st.session_state.car_numbers.get(car, "телефон не найден")
+                    st.write(f"- {car} → {phone}")
+            else:
+                st.write("(все машины есть)")
 
-        **Примечания:**  
-        - Данные из Google Sheets кешируются на 10 минут.  
-        - Справочники `car_numbers` и `cars` загружаются из защищённых секретов Streamlit.
-        """)
+        # ----- Предыдущий период -----
+        st.subheader(f"Предыдущий период: {d3.strftime('%d.%m.%Y')} – {d4.strftime('%d.%m.%Y')}")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.write("**✅ Есть данные у машин:**")
+            if res['d2_cars']:
+                st.write(", ".join(res['d2_cars']))
+            else:
+                st.write("(нет)")
+        with col2:
+            st.write("**❌ Нет данных у машин:**")
+            if res['diff_last']:
+                for car in res['diff_last']:
+                    phone = st.session_state.car_numbers.get(car, "телефон не найден")
+                    st.write(f"- {car} → {phone}")
+            else:
+                st.write("(все машины есть)")
+
+        # ----- Список телефонов для копирования (только из текущего периода) -----
+        st.divider()
+        st.subheader("📞 Телефоны машин без данных в ТЕКУЩЕМ периоде (для копирования)")
+        phones_to_copy = []
+        for car in res['diff_cur']:
+            phone = st.session_state.car_numbers.get(car, "")
+            if phone:
+                phones_to_copy.append(phone)
+        if phones_to_copy:
+            # Выводим в виде текста, который легко скопировать
+            phones_text = "\n".join(phones_to_copy)
+            st.code(phones_text, language="text")
+            st.caption("Скопируйте текст выше")
+        else:
+            st.info("Все машины есть в данных текущего периода.")
+
+        # ---- (Опционально) Скачать Excel ----
+        st.divider()
+        st.subheader("💾 Скачать полный отчёт (Excel)")
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df_res = pd.DataFrame(list(res['result_dict'].items()), columns=['Автомобиль', 'Разница пробега'])
+            df_res.to_excel(writer, sheet_name='Разница', index=False)
+            log_df = pd.DataFrame(res['logs'], columns=['Сообщение'])
+            log_df.to_excel(writer, sheet_name='Логи', index=False)
+            detail_df = pd.DataFrame({
+                'Период': ['Текущий', 'Предыдущий'],
+                'Машины с данными': [', '.join(res['d1_cars']), ', '.join(res['d2_cars'])],
+                'Машины без данных': [', '.join(res['diff_cur']), ', '.join(res['diff_last'])]
+            })
+            detail_df.to_excel(writer, sheet_name='Сводка', index=False)
+        output.seek(0)
+        st.download_button(
+            label="📥 Скачать Excel-отчёт",
+            data=output,
+            file_name=f"результаты_пробег_{datetime.now().strftime('%Y%m%d')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 
 if __name__ == "__main__":
     main()
