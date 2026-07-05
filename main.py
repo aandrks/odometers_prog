@@ -162,7 +162,7 @@ def main():
             with st.spinner("Загрузка данных из Google Sheets..."):
                 df = load_data_from_gsheet()
                 if df is not None:
-                    required_cols = ['time', 'car_number', 'odometer']
+                    required_cols = ['Timestamp', 'Гос. номер автомобиля (только 3 цифры)', 'Текущий пробег (значение на одометре) (только число)']
                     if all(col in df.columns for col in required_cols):
                         st.session_state.df_od = df
                         st.success(f"✅ Данные успешно загружены! Получено {len(df)} записей.")
@@ -170,6 +170,11 @@ def main():
                     else:
                         st.error(f"❌ Таблица должна содержать колонки: {', '.join(required_cols)}")
                         st.write("Найденные колонки:", list(df.columns))
+                df = df.rename(columns={
+                    'Timestamp': 'time',
+                    'Гос. номер автомобиля (только 3 цифры)': 'car_number',
+                    'Текущий пробег (значение на одометре) (только число)': 'odometer'
+                })
 
         st.divider()
         st.subheader("Текущее состояние сессии")
